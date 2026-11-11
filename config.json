@@ -1,0 +1,61 @@
+{
+  "paper": true,
+  "broker_mode": "paper",
+  "account_currency": "USD",
+  "account_balance_usd": 10000.0,
+  "risk_per_trade_pct": 1,
+  "max_loss_per_trade_usd": 100.0,
+  "max_daily_loss_usd": 1000,
+  "max_trades_per_day": 25,
+  "max_open_trades": 10,
+  "max_trades_per_pair": 2,
+  "max_correlated_usd_same_dir": 3,
+  "min_setup_score": 85,
+  "scan_cooldown_seconds": 45,
+  "max_spread_pips": 2.5,
+  "min_reward_to_risk": 1.8,
+  "min_timemachine_winrate": 0.42,
+  "news_blackout_minutes_before": 30,
+  "news_blackout_minutes_after": 30,
+  "require_human_approval": false,
+  "watchlist": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "XAUUSD",
+    "AUDUSD",
+    "USDCAD",
+    "USDCHF",
+    "NZDUSD"
+  ],
+  "sessions": {
+    "london_open_utc": "07:00",
+    "ny_open_utc": "12:00",
+    "ny_close_utc": "21:00",
+    "flat_friday_utc": "20:30"
+  },
+  "trade_management": {
+    "breakeven_trigger_r": 1.0,
+    "breakeven_lock_r": 0.15,
+    "partial_tp_trigger_r": 1.2,
+    "partial_close_pct": 0.5,
+    "trailing_start_r": 1.5,
+    "trailing_dist_r": 0.85
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "mt5": {
+    "terminal_path": "",
+    "login": 0,
+    "server": "",
+    "magic_number": 202611
+  },
+  "oanda": {
+    "api_key": "",
+    "account_id": "",
+    "environment": "practice"
+  }
+}

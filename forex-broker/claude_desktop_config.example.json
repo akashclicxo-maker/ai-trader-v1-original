@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "metatrader5": {
+      "command": "uvx",
+      "args": ["metatrader-mcp-server"],
+      "env": {
+        "MT5_LOGIN": "your_demo_login_id",
+        "MT5_PASSWORD": "your_demo_password",
+        "MT5_SERVER": "MetaQuotes-Demo",
+        "MT5_PAPER_ONLY": "true"
+      }
+    }
+  }
+}

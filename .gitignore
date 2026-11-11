@@ -1,0 +1,25 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# Volatile runtime state & logs (auto-generated at runtime)
+trader/state/*.json
+trader/state/*.json.tmp
+trader/state/*.txt
+trader/state/*.log
+mt5_bridge/compile.log
+*.tmp
+*.log
+
+# Compiled binaries (optional, source .mq5 is tracked)
+mt5_bridge/*.ex5
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
