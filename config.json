@@ -3,12 +3,12 @@
   "broker_mode": "paper",
   "account_currency": "USD",
   "account_balance_usd": 10000.0,
-  "risk_per_trade_pct": 1,
+  "risk_per_trade_pct": 3,
   "max_loss_per_trade_usd": 100.0,
-  "max_daily_loss_usd": 1000,
+  "max_daily_loss_usd": 3000,
   "max_trades_per_day": 25,
-  "max_open_trades": 10,
-  "max_trades_per_pair": 2,
+  "max_open_trades": 8,
+  "max_trades_per_pair": 1,
   "max_correlated_usd_same_dir": 3,
   "min_setup_score": 85,
   "scan_cooldown_seconds": 45,
@@ -26,7 +26,8 @@
     "AUDUSD",
     "USDCAD",
     "USDCHF",
-    "NZDUSD"
+    "NZDUSD",
+    "NAS100"
   ],
   "sessions": {
     "london_open_utc": "07:00",
