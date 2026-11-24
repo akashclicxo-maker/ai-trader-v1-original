@@ -389,6 +389,10 @@ def collect_dashboard_state() -> Dict[str, Any]:
 
     cfg = load_config()
     tm_map = compute_timemachine_map(scanner, cfg)
+    from forex_core.market_data import load_accounts
+    accounts = load_accounts()
+    active_accounts = [a for a in accounts if a.get("enabled", True)]
+    total_managed_balance = sum(float(a.get("balance_usd", 0.0)) for a in active_accounts)
 
     return {
         "tick_counter": TICK_COUNTER,
@@ -396,6 +400,9 @@ def collect_dashboard_state() -> Dict[str, Any]:
         "data_source": source,
         "account_balance": bal,
         "account_equity": eq,
+        "accounts": accounts,
+        "active_accounts_count": len(active_accounts),
+        "total_managed_balance": total_managed_balance,
         "config": cfg,
         "mt5_live": mt5_live,
         "scanner": scanner,
@@ -442,6 +449,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/api/config"):
             self._send_json(load_config())
+            return
+
+        if self.path.startswith("/api/accounts"):
+            from forex_core.market_data import load_accounts
+            accs = load_accounts()
+            tot_bal = sum(float(a.get("balance_usd", 0.0)) for a in accs if a.get("enabled", True))
+            act_count = sum(1 for a in accs if a.get("enabled", True))
+            self._send_json({"accounts": accs, "total_balance": tot_bal, "active_count": act_count})
             return
 
         if self.path.startswith("/api/state"):
@@ -541,6 +556,75 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 f"Custom Parameters Saved: Watchlist={current_cfg.get('watchlist')}, Risk={current_cfg.get('risk_per_trade_pct')}%, MinScore={current_cfg.get('min_setup_score')}/100, MaxOpen={current_cfg.get('max_open_trades')}",
             )
             self._send_json({"status": "SAVED", "config": current_cfg})
+            return
+
+        if self.path.startswith("/api/accounts"):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            req = json.loads(raw)
+            action = req.get("action", "add")
+            from forex_core.market_data import load_accounts, save_accounts
+            import uuid
+            accs = load_accounts()
+
+            if action == "add":
+                new_acc = {
+                    "id": f"acc-{uuid.uuid4().hex[:6]}",
+                    "name": req.get("name", "New Account").strip() or "New Account",
+                    "type": req.get("type", "paper"),
+                    "login": int(req.get("login", 0)),
+                    "server": str(req.get("server", "")).strip(),
+                    "terminal_path": str(req.get("terminal_path", "")).strip(),
+                    "magic_number": int(req.get("magic_number", random.randint(200000, 299999))),
+                    "balance_usd": float(req.get("balance_usd", 10000.0)),
+                    "risk_per_trade_pct": float(req.get("risk_per_trade_pct", 0.5)),
+                    "max_daily_loss_pct": float(req.get("max_daily_loss_pct", 4.0)),
+                    "max_drawdown_pct": float(req.get("max_drawdown_pct", 8.0)),
+                    "prop_firm_mode": bool(req.get("prop_firm_mode", True)),
+                    "enabled": True,
+                }
+                accs.append(new_acc)
+                save_accounts(accs)
+                log_event("ACCOUNTS", f"Added {new_acc['type'].upper()} account '{new_acc['name']}' (${new_acc['balance_usd']:,.2f}, Risk: {new_acc['risk_per_trade_pct']}%, Prop Firm Mode: {new_acc['prop_firm_mode']})")
+                self._send_json({"status": "ADDED", "account": new_acc, "accounts": accs})
+                return
+
+            elif action == "toggle":
+                target_id = req.get("id")
+                target_acc = None
+                for a in accs:
+                    if a.get("id") == target_id:
+                        a["enabled"] = not a.get("enabled", True)
+                        target_acc = a
+                        state_str = "ENABLED" if a["enabled"] else "DISABLED"
+                        log_event("ACCOUNTS", f"Account '{a.get('name')}' {state_str}")
+                        break
+                save_accounts(accs)
+                self._send_json({"status": "TOGGLED", "account": target_acc, "accounts": accs})
+                return
+
+            elif action == "delete":
+                target_id = req.get("id")
+                accs = [a for a in accs if a.get("id") != target_id]
+                save_accounts(accs)
+                log_event("ACCOUNTS", f"Account {target_id} deleted")
+                self._send_json({"status": "DELETED", "accounts": accs})
+                return
+
+            elif action == "update":
+                target_id = req.get("id")
+                for a in accs:
+                    if a.get("id") == target_id:
+                        for k in ("name", "type", "login", "server", "terminal_path", "balance_usd", "risk_per_trade_pct", "max_daily_loss_pct", "max_drawdown_pct", "prop_firm_mode", "enabled"):
+                            if k in req:
+                                a[k] = req[k]
+                        break
+                save_accounts(accs)
+                log_event("ACCOUNTS", f"Updated account {target_id}")
+                self._send_json({"status": "UPDATED", "accounts": accs})
+                return
+
+            self._send_json({"error": "Unknown action"}, status=400)
             return
 
         self.send_error(404, "Not Found")

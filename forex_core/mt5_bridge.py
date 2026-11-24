@@ -36,18 +36,22 @@ def clean_pair_name(sym: str) -> str:
     return s[:6]
 
 
-def read_mt5_state(max_age_seconds: float = 15.0) -> Optional[Dict[str, Any]]:
+def read_mt5_state(login: Optional[int] = None, max_age_seconds: float = 15.0) -> Optional[Dict[str, Any]]:
     """
     Reads live MT5 account & position state written by ForexAIBridge.ex5.
     Returns None if the EA is not currently attached/running in MT5.
+    Supports specific account login or global state.
     """
-    if not STATE_FILE.exists():
+    target_file = (COMMON_FILES_DIR / f"forex_ai_mt5_state_{login}.json") if login else STATE_FILE
+    if not target_file.exists():
+        target_file = STATE_FILE
+    if not target_file.exists():
         return None
     try:
-        mtime = STATE_FILE.stat().st_mtime
+        mtime = target_file.stat().st_mtime
         if (time.time() - mtime) > max_age_seconds:
             return None
-        raw = STATE_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+        raw = target_file.read_text(encoding="utf-8", errors="ignore").strip()
         if not raw:
             return None
         data = json.loads(raw)
@@ -58,7 +62,7 @@ def read_mt5_state(max_age_seconds: float = 15.0) -> Optional[Dict[str, Any]]:
     return None
 
 
-def send_mt5_command(line: str, wait_ack_sec: float = 2.0) -> Dict[str, Any]:
+def send_mt5_command(line: str, login: Optional[int] = None, wait_ack_sec: float = 2.0) -> Dict[str, Any]:
     """
     Sends a pipe-delimited command line to ForexAIBridge.ex5 in Common\\Files
     and optionally waits up to wait_ack_sec for the execution acknowledgement.
@@ -66,27 +70,39 @@ def send_mt5_command(line: str, wait_ack_sec: float = 2.0) -> Dict[str, Any]:
     COMMON_FILES_DIR.mkdir(parents=True, exist_ok=True)
     parts = line.split("|")
     cmd_id = parts[1] if len(parts) > 1 else uuid.uuid4().hex[:8]
+    target_cmd = (COMMON_FILES_DIR / f"forex_ai_cmd_{login}.txt") if login else CMD_FILE
+    target_ack = (COMMON_FILES_DIR / f"forex_ai_ack_{login}.txt") if login else ACK_FILE
 
+    if target_ack.exists():
+        try:
+            target_ack.unlink()
+        except Exception:
+            pass
     if ACK_FILE.exists():
         try:
             ACK_FILE.unlink()
         except Exception:
             pass
 
-    with open(CMD_FILE, "a", encoding="utf-8") as f:
+    with open(target_cmd, "a", encoding="utf-8") as f:
         f.write(line.strip() + "\n")
+    # Also write to global CMD_FILE if specific login file used
+    if login:
+        with open(CMD_FILE, "a", encoding="utf-8") as f:
+            f.write(line.strip() + "\n")
 
     deadline = time.time() + wait_ack_sec
     while time.time() < deadline:
-        if ACK_FILE.exists():
-            try:
-                ack_raw = ACK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
-                if ack_raw:
-                    ack = json.loads(ack_raw)
-                    if ack.get("cmd_id") == cmd_id:
-                        return ack
-            except Exception:
-                pass
+        for ack_path in (target_ack, ACK_FILE):
+            if ack_path.exists():
+                try:
+                    ack_raw = ack_path.read_text(encoding="utf-8", errors="ignore").strip()
+                    if ack_raw:
+                        ack = json.loads(ack_raw)
+                        if ack.get("cmd_id") == cmd_id:
+                            return ack
+                except Exception:
+                    pass
         time.sleep(0.08)
 
     return {"cmd_id": cmd_id, "status": "QUEUED_TO_MT5", "ticket": 0, "message": "Command dispatched to MT5"}
@@ -99,9 +115,10 @@ def send_mt5_open_order(
     sl_pips: float,
     tp_pips: float,
     max_per_pair: int = 1,
+    login: Optional[int] = None,
 ) -> Dict[str, Any]:
     clean_pair = clean_pair_name(pair)
-    mt5_state = read_mt5_state()
+    mt5_state = read_mt5_state(login=login)
     suffix = "+"
     if mt5_state:
         open_positions = mt5_state.get("open_positions", [])
@@ -122,13 +139,13 @@ def send_mt5_open_order(
 
     cmd_id = f"CMD-{uuid.uuid4().hex[:6].upper()}"
     line = f"OPEN|{cmd_id}|{broker_pair}|{direction.upper()}|{lots:.2f}|{sl_pips:.1f}|{tp_pips:.1f}"
-    ack = send_mt5_command(line, wait_ack_sec=1.5)
+    ack = send_mt5_command(line, login=login, wait_ack_sec=1.5)
 
     if ack.get("status") == "ERROR" and "Anti-Stacking" not in str(ack.get("message", "")):
         time.sleep(0.5)
         cmd_id2 = f"CMD-{uuid.uuid4().hex[:6].upper()}"
         line2 = f"OPEN|{cmd_id2}|{broker_pair}|{direction.upper()}|{lots:.2f}|{sl_pips:.1f}|{tp_pips:.1f}"
-        ack = send_mt5_command(line2, wait_ack_sec=1.5)
+        ack = send_mt5_command(line2, login=login, wait_ack_sec=1.5)
     return ack
 
 

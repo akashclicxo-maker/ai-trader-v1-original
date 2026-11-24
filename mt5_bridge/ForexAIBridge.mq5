@@ -212,10 +212,19 @@ void AutonomousPositionDefense()
 //+------------------------------------------------------------------+
 void ProcessIncomingCommands()
 {
-   if(!FileIsExist(CMD_FILE, FILE_COMMON))
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   string accCmdFile = StringFormat("forex_ai_cmd_%I64d.txt", login);
+
+   // Check account-specific command file first, then fallback to global
+   string targetCmdFile = "";
+   if(FileIsExist(accCmdFile, FILE_COMMON))
+      targetCmdFile = accCmdFile;
+   else if(FileIsExist(CMD_FILE, FILE_COMMON))
+      targetCmdFile = CMD_FILE;
+   else
       return;
 
-   int h = FileOpen(CMD_FILE, FILE_READ | FILE_TXT | FILE_COMMON | FILE_ANSI);
+   int h = FileOpen(targetCmdFile, FILE_READ | FILE_TXT | FILE_COMMON | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;
 
@@ -234,7 +243,7 @@ void ProcessIncomingCommands()
       }
    }
    FileClose(h);
-   FileDelete(CMD_FILE, FILE_COMMON);
+   FileDelete(targetCmdFile, FILE_COMMON);
 
    for(int i = 0; i < count; i++)
       ExecuteCommandLine(lines[i]);
@@ -427,5 +436,14 @@ void ExportTerminalState()
    json += "]}";
    FileWriteString(h, json);
    FileClose(h);
+
+   // Export account-specific state file for Multi-Account support
+   string accStateFile = StringFormat("forex_ai_mt5_state_%I64d.json", login);
+   int hAcc = FileOpen(accStateFile, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
+   if(hAcc != INVALID_HANDLE)
+   {
+      FileWriteString(hAcc, json);
+      FileClose(hAcc);
+   }
 }
 //+------------------------------------------------------------------+

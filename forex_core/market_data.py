@@ -217,6 +217,45 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
         return json.load(f)
 
 
+def load_accounts() -> List[Dict[str, Any]]:
+    """Loads all configured trading accounts (MT5 live, prop firm challenges, paper)."""
+    cfg = load_config()
+    accounts = cfg.get("accounts")
+    if not accounts or not isinstance(accounts, list):
+        default_bal = float(cfg.get("account_balance_usd", 10000.0))
+        default_risk = float(cfg.get("risk_per_trade_pct", 0.5))
+        mt5_cfg = cfg.get("mt5", {})
+        accounts = [{
+            "id": "acc-default",
+            "name": "Default Account",
+            "type": "mt5" if not cfg.get("paper", True) else "paper",
+            "login": mt5_cfg.get("login", 0),
+            "server": mt5_cfg.get("server", ""),
+            "terminal_path": mt5_cfg.get("terminal_path", ""),
+            "magic_number": mt5_cfg.get("magic_number", 202611),
+            "balance_usd": default_bal,
+            "risk_per_trade_pct": default_risk,
+            "max_daily_loss_pct": 4.0,
+            "max_drawdown_pct": 8.0,
+            "prop_firm_mode": True,
+            "enabled": True
+        }]
+    return accounts
+
+
+def save_accounts(accounts: List[Dict[str, Any]]) -> None:
+    """Persists the multi-account list back to config.json."""
+    cfg = load_config()
+    cfg["accounts"] = accounts
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def get_active_accounts() -> List[Dict[str, Any]]:
+    """Returns only enabled trading accounts."""
+    return [acc for acc in load_accounts() if acc.get("enabled", True)]
+
+
 def save_stage_output(stage_name: str, data: Dict[str, Any]) -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     out_path = STATE_DIR / f"{stage_name}.json"

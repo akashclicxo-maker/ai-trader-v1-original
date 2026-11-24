@@ -18,6 +18,7 @@ from typing import Any, Dict
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from forex_core.market_data import (
+    get_active_accounts,
     get_pip_value_per_lot,
     load_config,
     load_stage_output,
@@ -112,6 +113,38 @@ def calculate_lot_size(
         "actual_risk_pct": round((actual_risk_usd / max(balance, 1.0)) * 100.0, 2),
         "potential_profit_tp2_usd": potential_profit_tp2_usd,
     }
+
+    # Compute dedicated lot size allocations for all active accounts
+    active_accs = get_active_accounts()
+    allocations = []
+    for acc in active_accs:
+        acc_bal = float(acc.get("balance_usd", 10000.0))
+        acc_risk_pct = float(acc.get("risk_per_trade_pct", 0.5))
+        # If in Prop Firm mode, ensure risk does not exceed safe prop firm threshold
+        if acc.get("prop_firm_mode", False):
+            acc_risk_pct = min(acc_risk_pct, 1.0)
+        acc_allowed_risk = acc_bal * (acc_risk_pct / 100.0)
+        risk_per_std_lot = stop_pips * pip_val_std_lot
+        if risk_per_std_lot > 0:
+            raw_acc_lots = acc_allowed_risk / risk_per_std_lot
+            acc_lots = max(0.01, min(100.0, round(raw_acc_lots, 2)))
+        else:
+            acc_lots = 0.01
+        acc_actual_risk = round(acc_lots * stop_pips * pip_val_std_lot, 2)
+        allocations.append({
+            "account_id": acc.get("id"),
+            "account_name": acc.get("name"),
+            "type": acc.get("type", "paper"),
+            "login": acc.get("login", 0),
+            "server": acc.get("server", ""),
+            "balance_usd": acc_bal,
+            "risk_per_trade_pct": acc_risk_pct,
+            "recommended_lots": acc_lots,
+            "actual_risk_usd": acc_actual_risk,
+            "prop_firm_mode": acc.get("prop_firm_mode", False),
+        })
+    output["account_allocations"] = allocations
+
     save_stage_output("budget", output)
     return output
 

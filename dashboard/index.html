@@ -304,6 +304,41 @@
       overflow-y: auto;
     }
     .scroll-table { max-height: 220px; overflow-y: auto; }
+
+    /* Multi-Account Cards & Panel */
+    .account-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+      margin-bottom: 14px;
+    }
+    .account-card {
+      background: #0d1527;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+    .account-card.active-card {
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+    }
+    .account-card.disabled-card {
+      opacity: 0.55;
+      border-color: #334155;
+    }
+    .acc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .acc-name { font-weight: 700; font-size: 13px; color: #fff; }
+    .acc-meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+    .acc-row { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 4px; }
+    .acc-actions { display: flex; gap: 6px; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -318,9 +353,10 @@
     </div>
     <div class="controls">
       <button id="autoPilotBtn" class="autopilot-on" onclick="toggleAutoPilot()">🟢 24/7 QUANT ENGINE: ACTIVE</button>
-      <button class="purple" onclick="toggleConfigPanel()">⚙️ Configure Parameters</button>
+      <button id="btnAccounts" class="primary" onclick="toggleAccountsPanel()" style="background:#0284c7;border-color:#38bdf8;">🏢 Multi-Account (<span id="accActiveBadge">1</span> Active)</button>
+      <button class="purple" onclick="toggleConfigPanel()">⚙️ Parameters</button>
       <button class="primary" onclick="triggerAction('run_pipeline')">▶ Force Scan & Trade</button>
-      <button class="warn" onclick="triggerAction('reset')">↺ Reset Clean History</button>
+      <button class="warn" onclick="triggerAction('reset')">↺ Reset Clean</button>
       <button class="danger" onclick="triggerAction('flatten')">✖ Flatten All</button>
     </div>
   </header>
@@ -387,6 +423,84 @@
     <div style="margin-top:12px;display:flex;gap:8px;">
       <button class="success" onclick="saveUserConfig()">💾 Save &amp; Apply Parameters to Engine</button>
       <button onclick="toggleConfigPanel()">Close</button>
+    </div>
+  </div>
+
+  <!-- Multi-Account & Prop Firm Management Panel -->
+  <div class="param-panel" id="accountsPanel" style="display:none; border-color:#38bdf8;">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;">
+      <div>
+        <span style="font-size:14px;font-weight:800;color:var(--accent);">🏢 Multi-Account &amp; Prop Firm Challenge Manager</span>
+        <span style="display:block;font-size:11.5px;color:var(--muted);margin-top:2px;">
+          Execute simultaneously across multiple MT5 accounts &amp; Prop Firm challenges with isolated risk &amp; strict drawdown guards.
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="accSaveFeedback" style="font-size:11.5px;color:var(--green);font-weight:700;"></span>
+        <button onclick="toggleAccountsPanel()">✕ Close</button>
+      </div>
+    </div>
+
+    <!-- Aggregate Stats Strip -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:12px;">
+      <div style="background:#0b1120;padding:8px 12px;border-radius:6px;border:1px solid #1e293b;">
+        <span style="font-size:10.5px;color:var(--muted);text-transform:uppercase;">Total Managed Capital</span>
+        <div style="font-size:16px;font-weight:800;color:var(--accent);" id="accTotalCapital">$0.00</div>
+      </div>
+      <div style="background:#0b1120;padding:8px 12px;border-radius:6px;border:1px solid #1e293b;">
+        <span style="font-size:10.5px;color:var(--muted);text-transform:uppercase;">Active Trading Accounts</span>
+        <div style="font-size:16px;font-weight:800;color:var(--green);" id="accCountDisplay">0 Active</div>
+      </div>
+      <div style="background:#0b1120;padding:8px 12px;border-radius:6px;border:1px solid #1e293b;">
+        <span style="font-size:10.5px;color:var(--muted);text-transform:uppercase;">Prop Firm Risk Shield</span>
+        <div style="font-size:16px;font-weight:800;color:#a855f7;">4% Daily / 8% Max DD</div>
+      </div>
+    </div>
+
+    <!-- Accounts Cards Grid -->
+    <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:6px;">Configured Accounts:</div>
+    <div class="account-cards-grid" id="accountsCardsContainer"></div>
+
+    <!-- + Add Account Accordion/Form -->
+    <div style="background:#090e1a;border:1px dashed #334155;border-radius:8px;padding:12px;margin-top:10px;">
+      <div style="font-size:12.5px;font-weight:700;color:var(--accent);margin-bottom:8px;">+ Add New Trading / Prop Firm Account</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">Account Name / Label</label>
+          <input type="text" id="newAccName" placeholder="e.g. FTMO 100K Challenge" style="width:100%;padding:6px;font-size:11.5px;" />
+        </div>
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">Platform Type</label>
+          <select id="newAccType" style="width:100%;padding:6px;font-size:11.5px;">
+            <option value="mt5">MT5 Live (MetaTrader 5)</option>
+            <option value="paper">Paper Trading (Simulated)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">MT5 Login ID #</label>
+          <input type="number" id="newAccLogin" placeholder="e.g. 26068485" style="width:100%;padding:6px;font-size:11.5px;" />
+        </div>
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">Broker Server Name</label>
+          <input type="text" id="newAccServer" placeholder="e.g. FTMO-Server2" style="width:100%;padding:6px;font-size:11.5px;" />
+        </div>
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">Account Balance ($)</label>
+          <input type="number" id="newAccBalance" value="100000" step="1000" style="width:100%;padding:6px;font-size:11.5px;" />
+        </div>
+        <div>
+          <label style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px;">Risk Per Trade (%)</label>
+          <input type="number" id="newAccRisk" value="0.5" step="0.1" min="0.1" max="2.0" style="width:100%;padding:6px;font-size:11.5px;" />
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;">
+          <input type="checkbox" id="newAccPropFirm" checked style="width:auto;cursor:pointer;" />
+          <span style="color:#a855f7;font-weight:700;">🛡️ Prop Firm Mode</span>
+          <span style="color:var(--muted);font-size:10.5px;">(Strict 4% Daily Loss &amp; 8% Drawdown Protection)</span>
+        </label>
+        <button class="success" onclick="addNewAccountSubmit()" style="padding:6px 14px;font-size:11.5px;font-weight:700;margin-left:auto;">+ Add Account</button>
+      </div>
     </div>
   </div>
 
@@ -610,6 +724,174 @@
     function toggleConfigPanel() {
       const p = document.getElementById('configPanel');
       p.style.display = (p.style.display === 'none') ? 'block' : 'none';
+    }
+
+    let globalAccounts = [];
+
+    function toggleAccountsPanel() {
+      const p = document.getElementById('accountsPanel');
+      p.style.display = (p.style.display === 'none') ? 'block' : 'none';
+      if (p.style.display === 'block') {
+        fetchAccounts();
+      }
+    }
+
+    async function fetchAccounts() {
+      try {
+        const res = await fetch('/api/accounts');
+        const data = await res.json();
+        globalAccounts = data.accounts || [];
+        renderAccountsList(globalAccounts);
+        updateAccountsBadge(globalAccounts);
+      } catch (e) {
+        console.error("Error fetching accounts:", e);
+      }
+    }
+
+    function updateAccountsBadge(accs) {
+      const active = (accs || []).filter(a => a.enabled !== false);
+      const b = document.getElementById('accActiveBadge');
+      if (b) b.textContent = active.length;
+      const d = document.getElementById('accCountDisplay');
+      if (d) d.textContent = `${active.length} / ${accs.length} Active`;
+      const tot = active.reduce((s, a) => s + (parseFloat(a.balance_usd) || 0), 0);
+      const capEl = document.getElementById('accTotalCapital');
+      if (capEl) capEl.textContent = `$${tot.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    function renderAccountsList(accs) {
+      const container = document.getElementById('accountsCardsContainer');
+      if (!container) return;
+      if (!accs || accs.length === 0) {
+        container.innerHTML = `<div style="grid-column: 1/-1; color:var(--muted); padding:10px;">No trading accounts configured. Add your first account below!</div>`;
+        return;
+      }
+
+      container.innerHTML = accs.map(a => {
+        const isActive = a.enabled !== false;
+        const isMt5 = (a.type || 'paper').toLowerCase() === 'mt5';
+        const typeBadge = isMt5 ? `<span class="badge badge-pass">MT5 LIVE</span>` : `<span class="badge badge-regime">PAPER SIM</span>`;
+        const propBadge = a.prop_firm_mode ? `<span class="badge" style="background:#581c87;color:#f3e8ff;border:1px solid #9333ea;">🛡️ PROP FIRM</span>` : '';
+        const bal = parseFloat(a.balance_usd || 10000.0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+        return `
+          <div class="account-card ${isActive ? 'active-card' : 'disabled-card'}">
+            <div class="acc-header">
+              <span class="acc-name">${a.name || 'Account'}</span>
+              <div style="display:flex;gap:4px;">
+                ${typeBadge}
+                ${propBadge}
+              </div>
+            </div>
+            <div class="acc-meta">
+              ${isMt5 ? `Login: <strong>#${a.login || 0}</strong> • Server: <code>${a.server || 'Default'}</code>` : 'Simulated Paper Ledger'}
+            </div>
+            <div class="acc-row">
+              <span style="color:var(--muted);">Balance / Equity:</span>
+              <strong style="color:var(--accent);">$${bal}</strong>
+            </div>
+            <div class="acc-row">
+              <span style="color:var(--muted);">Risk / Trade:</span>
+              <strong>${a.risk_per_trade_pct || 0.5}%</strong>
+            </div>
+            <div class="acc-row">
+              <span style="color:var(--muted);">Daily Loss Cap:</span>
+              <strong style="color:var(--red);">${a.max_daily_loss_pct || 4.0}%</strong>
+            </div>
+            <div class="acc-actions">
+              <button class="btn ${isActive ? 'warn' : 'success'}" onclick="toggleAccountActive('${a.id}')" style="flex:1;padding:4px 8px;font-size:11px;">
+                ${isActive ? '⏸ Disable' : '▶ Enable'}
+              </button>
+              <button class="btn danger" onclick="deleteAccountAction('${a.id}')" style="padding:4px 8px;font-size:11px;" title="Delete Account">
+                🗑️
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function addNewAccountSubmit() {
+      const name = document.getElementById('newAccName').value.trim();
+      const type = document.getElementById('newAccType').value;
+      const login = parseInt(document.getElementById('newAccLogin').value) || 0;
+      const server = document.getElementById('newAccServer').value.trim();
+      const balance = parseFloat(document.getElementById('newAccBalance').value) || 10000.0;
+      const risk = parseFloat(document.getElementById('newAccRisk').value) || 0.5;
+      const propFirm = document.getElementById('newAccPropFirm').checked;
+
+      if (!name) {
+        alert("Please enter an account name / label (e.g. FTMO 100k Challenge).");
+        return;
+      }
+
+      const payload = {
+        action: "add",
+        name: name,
+        type: type,
+        login: login,
+        server: server,
+        balance_usd: balance,
+        risk_per_trade_pct: risk,
+        prop_firm_mode: propFirm,
+        max_daily_loss_pct: 4.0,
+        max_drawdown_pct: 8.0
+      };
+
+      try {
+        const res = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        globalAccounts = data.accounts || [];
+        renderAccountsList(globalAccounts);
+        updateAccountsBadge(globalAccounts);
+        document.getElementById('newAccName').value = '';
+        document.getElementById('newAccLogin').value = '';
+        document.getElementById('newAccServer').value = '';
+        const fb = document.getElementById('accSaveFeedback');
+        if (fb) {
+          fb.textContent = '✓ Account Added to Trading Engine!';
+          setTimeout(() => { fb.textContent = ''; }, 3500);
+        }
+      } catch (e) {
+        alert("Error adding account: " + e);
+      }
+    }
+
+    async function toggleAccountActive(accId) {
+      try {
+        const res = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: "toggle", id: accId })
+        });
+        const data = await res.json();
+        globalAccounts = data.accounts || [];
+        renderAccountsList(globalAccounts);
+        updateAccountsBadge(globalAccounts);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function deleteAccountAction(accId) {
+      if (!confirm("Are you sure you want to remove this account?")) return;
+      try {
+        const res = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: "delete", id: accId })
+        });
+        const data = await res.json();
+        globalAccounts = data.accounts || [];
+        renderAccountsList(globalAccounts);
+        updateAccountsBadge(globalAccounts);
+      } catch (e) {
+        console.error(e);
+      }
     }
 
     function renderWatchlistChips() {
@@ -966,6 +1248,11 @@
       const consoleEl = document.getElementById('liveConsole');
       const events = d.live_events || [];
       consoleEl.textContent = events.slice().reverse().join('\n');
+
+      // Update multi-account badge & capital
+      if (d.accounts) {
+        updateAccountsBadge(d.accounts);
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -1194,6 +1481,7 @@
       requestAnimationFrame(renderTimeMachineFrame);
     }
 
+    fetchAccounts();
     renderTimeMachineFrame();
     pollLiveTick();
     setInterval(pollLiveTick, 2500);

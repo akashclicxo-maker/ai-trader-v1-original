@@ -164,11 +164,49 @@ def execute_order(auto_confirm: bool = True) -> Dict[str, Any]:
     ledger["trades_today"] = int(ledger.get("trades_today", 0)) + 1
     save_ledger(ledger)
 
+    allocations = budget_state.get("account_allocations", [])
+    multi_executions = []
+    for acc in allocations:
+        acc_name = acc.get("account_name", "Account")
+        acc_type = acc.get("type", "paper")
+        acc_lots = float(acc.get("recommended_lots", lots))
+        acc_risk = float(acc.get("actual_risk_usd", risk_usd))
+
+        if acc_type == "mt5" and mt5_live is not None:
+            sub_ack = send_mt5_open_order(
+                pair=pair,
+                direction=direction,
+                lots=acc_lots,
+                sl_pips=sl_pips,
+                tp_pips=tp2_pips,
+            )
+            sub_ticket = sub_ack.get("ticket", 0)
+            multi_executions.append({
+                "account_id": acc.get("account_id"),
+                "account_name": acc_name,
+                "type": "mt5",
+                "ticket": f"MT5-{sub_ticket}" if sub_ticket else f"MT5-{uuid.uuid4().hex[:6].upper()}",
+                "lots": acc_lots,
+                "risk_usd": acc_risk,
+                "status": "EXECUTED" if sub_ack.get("status") != "ERROR" else "ERROR",
+            })
+        else:
+            multi_executions.append({
+                "account_id": acc.get("account_id"),
+                "account_name": acc_name,
+                "type": "paper",
+                "ticket": f"PAPER-{uuid.uuid4().hex[:6].upper()}",
+                "lots": acc_lots,
+                "risk_usd": acc_risk,
+                "status": "EXECUTED",
+            })
+
     output = {
         "status": "EXECUTED",
         "executed": True,
         "broker_mode": broker_mode,
         "order": position,
+        "account_executions": multi_executions,
         "open_positions_count": len(ledger["open_positions"]),
     }
     save_stage_output("broker", output)

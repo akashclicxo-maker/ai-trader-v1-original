@@ -50,10 +50,57 @@
   },
   "mt5": {
     "terminal_path": "",
-    "login": 0,
-    "server": "",
+    "login": 26068485,
+    "server": "VantageMarkets-Demo",
     "magic_number": 202611
   },
+  "accounts": [
+    {
+      "id": "acc-vantage-demo",
+      "name": "Vantage Demo (Primary MT5)",
+      "type": "mt5",
+      "login": 26068485,
+      "server": "VantageMarkets-Demo",
+      "terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+      "magic_number": 202611,
+      "balance_usd": 8605.34,
+      "risk_per_trade_pct": 0.5,
+      "max_daily_loss_pct": 4.0,
+      "max_drawdown_pct": 8.0,
+      "prop_firm_mode": true,
+      "enabled": true
+    },
+    {
+      "id": "acc-ftmo-100k",
+      "name": "FTMO $100K Challenge (Practice)",
+      "type": "paper",
+      "login": 1092834,
+      "server": "FTMO-Demo",
+      "terminal_path": "",
+      "magic_number": 202612,
+      "balance_usd": 100000.0,
+      "risk_per_trade_pct": 0.5,
+      "max_daily_loss_pct": 4.0,
+      "max_drawdown_pct": 8.0,
+      "prop_firm_mode": true,
+      "enabled": false
+    },
+    {
+      "id": "acc-fundingpips-50k",
+      "name": "FundingPips $50K (Practice)",
+      "type": "paper",
+      "login": 583921,
+      "server": "FundingPips-Demo",
+      "terminal_path": "",
+      "magic_number": 202613,
+      "balance_usd": 50000.0,
+      "risk_per_trade_pct": 0.5,
+      "max_daily_loss_pct": 4.0,
+      "max_drawdown_pct": 8.0,
+      "prop_firm_mode": true,
+      "enabled": false
+    }
+  ],
   "oanda": {
     "api_key": "",
     "account_id": "",
