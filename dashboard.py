@@ -51,6 +51,9 @@ LEDGER_PATH = STATE_DIR / "paper_ledger.json"
 
 LIVE_EVENT_LOG: List[str] = []
 TICK_COUNTER: int = 0
+LAST_TRADE_EXECUTION_TIME: float = 0.0
+TICK_LOCK = threading.Lock()
+AUTO_TRADE_ENABLED: bool = True
 
 
 def log_event(agent: str, msg: str) -> None:
@@ -99,43 +102,56 @@ def process_live_tick() -> Dict[str, Any]:
         mt5_open = mt5_live.get("open_positions", [])
         open_pairs = {clean_pair_name(p.get("pair", "")) for p in mt5_open}
 
-        # Controlled institutional scan cadence: scan every 6 ticks (~15s)
+        # Controlled institutional scan cadence: scan every 6 ticks (~15s) with execution cooldown
+        global LAST_TRADE_EXECUTION_TIME, AUTO_TRADE_ENABLED
+        cooldown_sec = float(cfg.get("scan_cooldown_seconds", 60))
+        time_since_last_exec = time.time() - LAST_TRADE_EXECUTION_TIME
+
+        if not AUTO_TRADE_ENABLED:
+            if TICK_COUNTER % 12 == 1:
+                log_event("SYSTEM", f"Auto-Trading is PAUSED (Monitoring {len(mt5_open)} open positions & trailing shields)")
+            return collect_dashboard_state()
+
         scanner = load_stage_output("scanner")
         if not scanner or (TICK_COUNTER % 6 == 1):
-            scan_mod = _load_agent_module("forex-scanner/scan.py", "forex_scanner")
-            s1 = scan_mod.run_scanner(pairs=None, timeframe="15m", offline=False)
-            if len(mt5_open) < max_open:
-                available = [
-                    c
-                    for c in s1.get("candidates", [])
-                    if clean_pair_name(c["pair"]) not in open_pairs
-                    and c.get("market_regime") != "CHOP_NO_TRADE"
-                    and int(c.get("score", 0)) >= min_score
-                ]
-                if available:
-                    best = available[0]
-                    summary = run_full_pipeline(pair=best["pair"], offline=False, verbose=False)
-                    log_event(
-                        "01 /scanner",
-                        f"Regime: {best.get('market_regime','STRONG_TREND')} [{best.get('grade','A')} {best['score']}/100] -> {best['pair']} {best['direction']} ({best.get('confluence','')})",
-                    )
-                    if summary["broker"].get("executed"):
-                        o = summary["broker"]["order"]
+            if time_since_last_exec < cooldown_sec:
+                pass  # Cooldown active, wait before initiating new scan/trade
+            else:
+                scan_mod = _load_agent_module("forex-scanner/scan.py", "forex_scanner")
+                s1 = scan_mod.run_scanner(pairs=None, timeframe="15m", offline=False)
+                if len(mt5_open) < max_open:
+                    available = [
+                        c
+                        for c in s1.get("candidates", [])
+                        if clean_pair_name(c["pair"]) not in open_pairs
+                        and c.get("market_regime") != "CHOP_NO_TRADE"
+                        and int(c.get("score", 0)) >= min_score
+                    ]
+                    if available:
+                        best = available[0]
+                        summary = run_full_pipeline(pair=best["pair"], offline=False, verbose=False)
                         log_event(
-                            "09 /broker",
-                            f"EXECUTED {o['ticket_id']}: {o['direction']} {o['lots']} Lots {o['pair']} @ {o['entry_price']} ({summary['budget'].get('progression_mode','')})",
+                            "01 /scanner",
+                            f"Regime: {best.get('market_regime','STRONG_TREND')} [{best.get('grade','A')} {best['score']}/100] -> {best['pair']} {best['direction']} ({best.get('confluence','')})",
+                        )
+                        if summary["broker"].get("executed"):
+                            LAST_TRADE_EXECUTION_TIME = time.time()
+                            o = summary["broker"]["order"]
+                            log_event(
+                                "09 /broker",
+                                f"EXECUTED {o['ticket_id']}: {o['direction']} {o['lots']} Lots {o['pair']} @ {o['entry_price']} ({summary['budget'].get('progression_mode','')})",
+                            )
+                    else:
+                        log_event(
+                            "01 /scanner",
+                            f"Multi-Regime Scan complete. Active MT5 slots: {len(mt5_open)}/{max_open} ({', '.join(sorted(open_pairs))}). Waiting for A/A+ setup.",
                         )
                 else:
+                    top_c = s1.get("top_pick", {})
                     log_event(
                         "01 /scanner",
-                        f"Multi-Regime Scan complete. Active MT5 slots: {len(mt5_open)}/{max_open} ({', '.join(sorted(open_pairs))}). Waiting for A/A+ setup.",
+                        f"Portfolio Full ({len(mt5_open)}/{max_open}: {', '.join(sorted(open_pairs))}) | Top Market Regime: {top_c.get('pair','')} {top_c.get('market_regime','')} ({top_c.get('score',0)}/100)",
                     )
-            else:
-                top_c = s1.get("top_pick", {})
-                log_event(
-                    "01 /scanner",
-                    f"Portfolio Full ({len(mt5_open)}/{max_open}: {', '.join(sorted(open_pairs))}) | Top Market Regime: {top_c.get('pair','')} {top_c.get('market_regime','')} ({top_c.get('score',0)}/100)",
-                )
         else:
             total_pnl = float(mt5_live.get("floating_pnl", 0.0))
             log_event(
@@ -396,6 +412,7 @@ def collect_dashboard_state() -> Dict[str, Any]:
 
     return {
         "tick_counter": TICK_COUNTER,
+        "auto_trade_enabled": AUTO_TRADE_ENABLED,
         "current_time_bdt": now_bdt().strftime("%d %b %Y %I:%M:%S %p BDT"),
         "data_source": source,
         "account_balance": bal,
@@ -466,9 +483,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, status=500)
             return
 
+        if self.path.startswith("/api/toggle_autotrade"):
+            global AUTO_TRADE_ENABLED
+            AUTO_TRADE_ENABLED = not AUTO_TRADE_ENABLED
+            status_str = "ENABLED" if AUTO_TRADE_ENABLED else "PAUSED"
+            log_event("SYSTEM", f"Auto-Trading {status_str} via Dashboard Toggle.")
+            self._send_json({"auto_trade_enabled": AUTO_TRADE_ENABLED, "status": status_str})
+            return
+
         if self.path.startswith("/api/tick"):
             try:
-                self._send_json(process_live_tick())
+                with TICK_LOCK:
+                    self._send_json(process_live_tick())
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
             return
@@ -535,6 +561,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     json.dump(fresh_ledger, f, indent=2)
                 LIVE_EVENT_LOG.clear()
                 log_event("SYSTEM", f"Previous history cleared: Fresh session initialized (Balance: ${fresh_bal:,.2f}, Realized Loss: $0.00). Ready for clean trade executions.")
+                try:
+                    run_full_pipeline(pair=None, offline=False, verbose=False)
+                except Exception:
+                    pass
                 self._send_json(collect_dashboard_state())
                 return
 
@@ -631,10 +661,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def _autonomous_background_loop() -> None:
-    """Runs process_live_tick() 24/7 in the background even when no browser tab is open."""
+    """Runs process_live_tick() 24/7 in the background with race-condition prevention lock."""
     while True:
         try:
-            process_live_tick()
+            with TICK_LOCK:
+                process_live_tick()
         except Exception:
             pass
         time.sleep(5.0)

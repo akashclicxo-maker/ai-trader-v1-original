@@ -87,16 +87,27 @@ def run_timemachine(
             hist_losses += 1
 
     hist_total = hist_wins + hist_losses
-    hist_winrate = max(0.42, hist_wins / hist_total) if hist_total >= 8 else 0.54
+    # Genuine historical winrate from actual candle lookback (unrigged, no artificial floor)
+    if hist_total >= 8:
+        hist_winrate = hist_wins / hist_total
+    elif hist_total > 0:
+        base_theoretical = sl_p / (sl_p + tp_p)
+        hist_winrate = (hist_wins / hist_total) * 0.5 + base_theoretical * 0.5
+    else:
+        hist_winrate = sl_p / (sl_p + tp_p)
 
-    # 2. 10,000-Session Monte Carlo Simulation blending setup score + macro alignment + R:R
+    # 2. 10,000-Session Monte Carlo Simulation with unrigged probability distribution
     setup_score = float(top.get("score", 75))
     macro_aligned = bool(macro_state.get("macro_aligned", True))
 
-    # Random walk hitting barrier probabilities with trend drift
+    # Theoretical random walk barrier probability with confluence adjustment
     base_prob = sl_p / (sl_p + tp_p)
-    edge_boost = ((setup_score - 60.0) / 100.0) * 0.25 + (0.03 if macro_aligned else -0.03)
-    target_prob = max(0.25, min(0.78, (base_prob * 0.30) + (hist_winrate * 0.70) + edge_boost))
+    edge_adjustment = ((setup_score - 75.0) / 100.0) * 0.08 + (0.02 if macro_aligned else -0.02)
+    
+    if hist_total >= 8:
+        target_prob = max(0.10, min(0.75, (hist_winrate * 0.65) + (base_prob * 0.35) + edge_adjustment))
+    else:
+        target_prob = max(0.10, min(0.75, base_prob + edge_adjustment))
 
     seed_key = f"{pair}:{direction}:{sl_p}:{tp_p}:{setup_score}"
     rng = random.Random(int(hashlib.md5(seed_key.encode("utf-8")).hexdigest()[:8], 16))

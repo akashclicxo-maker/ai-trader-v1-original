@@ -47,6 +47,10 @@ PAIR_SPECS: Dict[str, Dict[str, Any]] = {
     "USDCHF": {"base_price": 0.8650, "pip_size": 0.0001, "pip_val_lot": 11.56,"typical_spread": 1.5, "yahoo": "CHF=X",    "tv": "FX:USDCHF"},
     "NZDUSD": {"base_price": 0.5975, "pip_size": 0.0001, "pip_val_lot": 10.0, "typical_spread": 1.6, "yahoo": "NZDUSD=X", "tv": "FX:NZDUSD"},
     "XAUUSD": {"base_price": 2685.50,"pip_size": 0.10,   "pip_val_lot": 10.0, "typical_spread": 2.1, "yahoo": "GC=F",     "tv": "OANDA:XAUUSD"},
+    "NAS100": {"base_price": 20800.0,"pip_size": 1.0,    "pip_val_lot": 1.0,  "typical_spread": 1.5, "yahoo": "^NDX",     "tv": "OANDA:NAS100USD"},
+    "US30":   {"base_price": 44500.0,"pip_size": 1.0,    "pip_val_lot": 1.0,  "typical_spread": 2.2, "yahoo": "^DJI",     "tv": "OANDA:US30USD"},
+    "SPX500": {"base_price": 5950.0, "pip_size": 0.10,   "pip_val_lot": 1.0,  "typical_spread": 0.6, "yahoo": "^GSPC",    "tv": "OANDA:SPX500USD"},
+    "GER40":  {"base_price": 19500.0,"pip_size": 1.0,    "pip_val_lot": 1.0,  "typical_spread": 1.8, "yahoo": "^GDAXI",   "tv": "OANDA:DE40EUR"},
 }
 
 
@@ -55,7 +59,15 @@ def get_pair_spec(pair: str) -> Dict[str, Any]:
     clean = str(pair).upper().replace("/", "").replace("+", "").strip()
     if clean in PAIR_SPECS:
         return PAIR_SPECS[clean]
-    if "JPY" in clean:
+    if any(k in clean for k in ("NAS100", "USTEC", "US100", "NDX", "TECH100")):
+        spec = {"base_price": 20800.0, "pip_size": 1.0, "pip_val_lot": 1.0, "typical_spread": 1.5, "yahoo": "^NDX", "tv": "OANDA:NAS100USD"}
+    elif any(k in clean for k in ("US30", "DJ30", "DOW", "WALLSTREET", "WS30")):
+        spec = {"base_price": 44500.0, "pip_size": 1.0, "pip_val_lot": 1.0, "typical_spread": 2.2, "yahoo": "^DJI", "tv": "OANDA:US30USD"}
+    elif any(k in clean for k in ("SPX500", "US500", "SP500")):
+        spec = {"base_price": 5950.0, "pip_size": 0.10, "pip_val_lot": 1.0, "typical_spread": 0.6, "yahoo": "^GSPC", "tv": "OANDA:SPX500USD"}
+    elif any(k in clean for k in ("GER40", "GER30", "DAX")):
+        spec = {"base_price": 19500.0, "pip_size": 1.0, "pip_val_lot": 1.0, "typical_spread": 1.8, "yahoo": "^GDAXI", "tv": "OANDA:DE40EUR"}
+    elif "JPY" in clean:
         spec = {"base_price": 160.0, "pip_size": 0.01, "pip_val_lot": 6.50, "typical_spread": 1.5, "yahoo": f"{clean}=X", "tv": f"FX:{clean}"}
     elif "XAU" in clean or "GOLD" in clean:
         spec = {"base_price": 2700.0, "pip_size": 0.10, "pip_val_lot": 10.0, "typical_spread": 2.2, "yahoo": "GC=F", "tv": "OANDA:XAUUSD"}
@@ -314,8 +326,16 @@ def get_pip_size(pair: str) -> float:
 
 def get_pip_value_per_lot(pair: str) -> float:
     """Returns USD value of 1 pip for 1.0 Standard Lot (100,000 units)."""
-    spec = get_pair_spec(pair)
-    return float(spec.get("pip_val_lot", 10.0))
+    clean = str(pair).upper().replace("/", "").replace("+", "").strip()
+    spec = get_pair_spec(clean)
+    base_pip_val = float(spec.get("pip_val_lot", 10.0))
+    if "JPY" in clean:
+        scanner = load_stage_output("scanner") or {}
+        top = scanner.get("top_pick", {})
+        price = float(top.get("price", 0.0)) if top.get("pair") == clean else 0.0
+        if price > 50.0:
+            return round(1000.0 / price, 2)
+    return base_pip_val
 
 
 def price_to_pips(pair: str, price_diff: float) -> float:
@@ -494,6 +514,63 @@ def compute_atr(candles: List[Dict[str, Any]], period: int = 14) -> List[float]:
             prev_atr = atrs[-1]
             atrs.append((prev_atr * (period - 1) + trs[i]) / period)
     return atrs
+
+
+def compute_adx(candles: List[Dict[str, Any]], period: int = 14) -> List[float]:
+    """Computes genuine Wilder's Average Directional Index (ADX 14) from OHLC candles."""
+    if len(candles) < (period * 2 + 1):
+        return [20.0] * len(candles)
+
+    trs: List[float] = []
+    dm_plus: List[float] = []
+    dm_minus: List[float] = []
+
+    for i in range(1, len(candles)):
+        h = float(candles[i]["high"])
+        l = float(candles[i]["low"])
+        prev_h = float(candles[i - 1]["high"])
+        prev_l = float(candles[i - 1]["low"])
+        prev_c = float(candles[i - 1]["close"])
+
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        trs.append(tr)
+
+        up = h - prev_h
+        down = prev_l - l
+        dm_plus.append(up if (up > down and up > 0) else 0.0)
+        dm_minus.append(down if (down > up and down > 0) else 0.0)
+
+    tr_smooth = sum(trs[:period])
+    plus_smooth = sum(dm_plus[:period])
+    minus_smooth = sum(dm_minus[:period])
+
+    dx_list: List[float] = []
+    for i in range(period, len(trs)):
+        if i > period:
+            tr_smooth = tr_smooth - (tr_smooth / period) + trs[i]
+            plus_smooth = plus_smooth - (plus_smooth / period) + dm_plus[i]
+            minus_smooth = minus_smooth - (minus_smooth / period) + dm_minus[i]
+
+        pdi = (100.0 * plus_smooth / tr_smooth) if tr_smooth > 0 else 0.0
+        mdi = (100.0 * minus_smooth / tr_smooth) if tr_smooth > 0 else 0.0
+        di_sum = pdi + mdi
+        dx = (100.0 * abs(pdi - mdi) / di_sum) if di_sum > 0 else 0.0
+        dx_list.append(dx)
+
+    if len(dx_list) < period:
+        return [20.0] * len(candles)
+
+    adx_res: List[float] = [20.0] * (len(candles) - len(dx_list) + period - 1)
+    adx_val = sum(dx_list[:period]) / period
+    adx_res.append(round(adx_val, 1))
+
+    for dx in dx_list[period:]:
+        adx_val = (adx_val * (period - 1) + dx) / period
+        adx_res.append(round(adx_val, 1))
+
+    while len(adx_res) < len(candles):
+        adx_res.insert(0, 20.0)
+    return adx_res[-len(candles):]
 
 
 def compute_bollinger(

@@ -109,40 +109,104 @@ def execute_order(auto_confirm: bool = True) -> Dict[str, Any]:
     risk_usd = float(budget_state.get("actual_risk_usd", 20.0))
 
     scanner_state = load_stage_output("scanner") or {}
-    is_offline = scanner_state.get("top_pick", {}).get("data_source") == "simulated_market"
-    mt5_live = None if is_offline else read_mt5_state()
+    mt5_live = read_mt5_state()
+    allocations = budget_state.get("account_allocations", [])
+    mt5_allocations = [a for a in allocations if a.get("type") == "mt5"]
+
+    multi_executions = []
+    primary_ticket_id = None
+    broker_mode = "paper"
+    exec_lots = lots
+    exec_risk = risk_usd
+
     if mt5_live is not None:
-        ack = send_mt5_open_order(
-            pair=pair,
-            direction=direction,
-            lots=lots,
-            sl_pips=sl_pips,
-            tp_pips=tp2_pips,
-        )
-        if ack.get("status") == "ERROR":
-            err_out = {
-                "status": f"MT5_ERROR ({ack.get('message', 'rejected')})",
-                "executed": False,
-                "reason": [ack.get("message", "MT5 order error")],
-            }
-            save_stage_output("broker", err_out)
-            return err_out
-        mt5_ticket = ack.get("ticket", 0)
-        ticket_id = f"MT5-{mt5_ticket}" if mt5_ticket else f"MT5-{uuid.uuid4().hex[:6].upper()}"
         broker_mode = f"mt5_live ({mt5_live.get('server', 'MT5')})"
+        # If specific MT5 accounts are configured in allocations, execute via allocations
+        if mt5_allocations:
+            for acc in allocations:
+                acc_name = acc.get("account_name", "Account")
+                acc_type = acc.get("type", "paper")
+                acc_lots = float(acc.get("recommended_lots", lots))
+                acc_risk = float(acc.get("actual_risk_usd", risk_usd))
+
+                if acc_type == "mt5":
+                    sub_ack = send_mt5_open_order(
+                        pair=pair,
+                        direction=direction,
+                        lots=acc_lots,
+                        sl_pips=sl_pips,
+                        tp_pips=tp2_pips,
+                    )
+                    sub_ticket = sub_ack.get("ticket", 0)
+                    if not primary_ticket_id and sub_ticket:
+                        primary_ticket_id = f"MT5-{sub_ticket}"
+                        exec_lots = acc_lots
+                        exec_risk = acc_risk
+                    multi_executions.append({
+                        "account_id": acc.get("account_id"),
+                        "account_name": acc_name,
+                        "type": "mt5",
+                        "ticket": f"MT5-{sub_ticket}" if sub_ticket else f"MT5-{uuid.uuid4().hex[:6].upper()}",
+                        "lots": acc_lots,
+                        "risk_usd": acc_risk,
+                        "status": "EXECUTED" if sub_ack.get("status") != "ERROR" else "ERROR",
+                    })
+                else:
+                    multi_executions.append({
+                        "account_id": acc.get("account_id"),
+                        "account_name": acc_name,
+                        "type": "paper",
+                        "ticket": f"PAPER-{uuid.uuid4().hex[:6].upper()}",
+                        "lots": acc_lots,
+                        "risk_usd": acc_risk,
+                        "status": "EXECUTED",
+                    })
+        else:
+            # Fallback to single primary MT5 order if no multi-account allocations defined
+            ack = send_mt5_open_order(
+                pair=pair,
+                direction=direction,
+                lots=lots,
+                sl_pips=sl_pips,
+                tp_pips=tp2_pips,
+            )
+            if ack.get("status") == "ERROR":
+                err_out = {
+                    "status": f"MT5_ERROR ({ack.get('message', 'rejected')})",
+                    "executed": False,
+                    "reason": [ack.get("message", "MT5 order error")],
+                }
+                save_stage_output("broker", err_out)
+                return err_out
+            mt5_ticket = ack.get("ticket", 0)
+            primary_ticket_id = f"MT5-{mt5_ticket}" if mt5_ticket else f"MT5-{uuid.uuid4().hex[:6].upper()}"
     else:
         broker_mode = "paper" if cfg.get("paper", True) else cfg.get("broker_mode", "paper")
-        ticket_id = f"FX-{uuid.uuid4().hex[:8].upper()}"
+        primary_ticket_id = f"FX-{uuid.uuid4().hex[:8].upper()}"
+        for acc in allocations:
+            multi_executions.append({
+                "account_id": acc.get("account_id"),
+                "account_name": acc.get("account_name", "Account"),
+                "type": "paper",
+                "ticket": f"PAPER-{uuid.uuid4().hex[:6].upper()}",
+                "lots": float(acc.get("recommended_lots", lots)),
+                "risk_usd": float(acc.get("actual_risk_usd", risk_usd)),
+                "status": "EXECUTED",
+            })
+
+    if not primary_ticket_id:
+        primary_ticket_id = f"MT5-{uuid.uuid4().hex[:6].upper()}" if mt5_live is not None else f"FX-{uuid.uuid4().hex[:8].upper()}"
+
     now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
 
     position = {
-        "ticket_id": ticket_id,
+        "ticket_id": primary_ticket_id,
         "broker_mode": broker_mode,
         "pair": pair,
         "direction": direction,
         "order_type": order_type,
-        "lots": lots,
-        "remaining_lots": lots,
+        "lots": exec_lots,
+        "remaining_lots": exec_lots,
         "entry_price": entry_price,
         "current_price": entry_price,
         "stop_loss": sl_price,
@@ -150,7 +214,7 @@ def execute_order(auto_confirm: bool = True) -> Dict[str, Any]:
         "tp1_1r": tp1_price,
         "tp2_primary": tp2_price,
         "tp3_runner": tp3_price,
-        "risk_usd": risk_usd,
+        "risk_usd": exec_risk,
         "breakeven_active": False,
         "partial_tp_taken": False,
         "unrealized_pnl_usd": 0.0,
@@ -163,43 +227,6 @@ def execute_order(auto_confirm: bool = True) -> Dict[str, Any]:
     ledger["open_positions"].append(position)
     ledger["trades_today"] = int(ledger.get("trades_today", 0)) + 1
     save_ledger(ledger)
-
-    allocations = budget_state.get("account_allocations", [])
-    multi_executions = []
-    for acc in allocations:
-        acc_name = acc.get("account_name", "Account")
-        acc_type = acc.get("type", "paper")
-        acc_lots = float(acc.get("recommended_lots", lots))
-        acc_risk = float(acc.get("actual_risk_usd", risk_usd))
-
-        if acc_type == "mt5" and mt5_live is not None:
-            sub_ack = send_mt5_open_order(
-                pair=pair,
-                direction=direction,
-                lots=acc_lots,
-                sl_pips=sl_pips,
-                tp_pips=tp2_pips,
-            )
-            sub_ticket = sub_ack.get("ticket", 0)
-            multi_executions.append({
-                "account_id": acc.get("account_id"),
-                "account_name": acc_name,
-                "type": "mt5",
-                "ticket": f"MT5-{sub_ticket}" if sub_ticket else f"MT5-{uuid.uuid4().hex[:6].upper()}",
-                "lots": acc_lots,
-                "risk_usd": acc_risk,
-                "status": "EXECUTED" if sub_ack.get("status") != "ERROR" else "ERROR",
-            })
-        else:
-            multi_executions.append({
-                "account_id": acc.get("account_id"),
-                "account_name": acc_name,
-                "type": "paper",
-                "ticket": f"PAPER-{uuid.uuid4().hex[:6].upper()}",
-                "lots": acc_lots,
-                "risk_usd": acc_risk,
-                "status": "EXECUTED",
-            })
 
     output = {
         "status": "EXECUTED",

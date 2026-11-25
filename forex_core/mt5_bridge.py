@@ -29,10 +29,26 @@ ACK_FILE = COMMON_FILES_DIR / "forex_ai_ack.txt"
 
 
 def clean_pair_name(sym: str) -> str:
-    s = str(sym).upper().replace("/", "").replace("+", "")
-    for sfx in (".PC", ".P", ".R", ".A", ".PRO", ".ECN"):
-        if s.endswith(sfx):
-            s = s[: -len(sfx)]
+    s = str(sym).upper().replace("/", "").replace("+", "").replace("-", "").replace(".", "").strip()
+    if any(k in s for k in ("USTEC", "NAS100", "US100", "NDX", "TECH100")):
+        return "NAS100"
+    if any(k in s for k in ("XAUUSD", "GOLD", "XAU")):
+        return "XAUUSD"
+    if any(k in s for k in ("US30", "DJ30", "DOW", "WALLSTREET", "WS30")):
+        return "US30"
+    if any(k in s for k in ("SPX500", "US500", "SP500")):
+        return "SPX500"
+    if any(k in s for k in ("GER40", "GER30", "DAX", "DE40")):
+        return "GER40"
+    if any(k in s for k in ("BTCUSD", "BTCUSDT", "BITCOIN")):
+        return "BTCUSD"
+    if any(k in s for k in ("USOIL", "WTIOIL", "WTI", "CRUDE")):
+        return "WTIOIL"
+
+    for sfx in ("RAW", "PRO", "ECN", "STP", "PC", "CASH", "MICRO", "MINI", "M", "P", "R", "A", "C"):
+        if s.endswith(sfx) and len(s) > 6:
+            s = s[:-len(sfx)]
+            break
     return s[:6]
 
 
@@ -119,7 +135,7 @@ def send_mt5_open_order(
 ) -> Dict[str, Any]:
     clean_pair = clean_pair_name(pair)
     mt5_state = read_mt5_state(login=login)
-    suffix = "+"
+    suffix = ""
     if mt5_state:
         open_positions = mt5_state.get("open_positions", [])
         same_pair_count = sum(1 for p in open_positions if clean_pair_name(p.get("pair", "")) == clean_pair)
@@ -132,8 +148,8 @@ def send_mt5_open_order(
             }
         for pos in open_positions:
             sym = str(pos.get("pair", ""))
-            if len(sym) > 6:
-                suffix = sym[6:]
+            if sym.startswith(clean_pair) and len(sym) > len(clean_pair):
+                suffix = sym[len(clean_pair):]
                 break
     broker_pair = f"{clean_pair}{suffix}"
 
@@ -190,6 +206,10 @@ def deduplicate_mt5_positions(max_per_pair: int = 1) -> List[str]:
             plist.sort(key=lambda x: float(x.get("unrealized_pnl_usd", 0.0)), reverse=True)
             to_close = plist[max_per_pair:]
             for dup in to_close:
+                # Investabl Rule 4 Compliance: Minimum 20s holding time before closing
+                open_time_unix = int(dup.get("open_time_unix", 0))
+                if open_time_unix > 0 and (time.time() - open_time_unix) < 22:
+                    continue
                 raw_t = int(dup.get("raw_ticket", 0))
                 if raw_t > 0:
                     cid = f"DEDUP-{uuid.uuid4().hex[:5].upper()}"

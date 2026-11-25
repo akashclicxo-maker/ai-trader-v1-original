@@ -43,8 +43,10 @@ def plan_exit(
     effective_rr = float(rr_target if rr_target is not None else top.get("recommended_rr", 2.0))
     regime = str(top.get("market_regime", "STRONG_TREND"))
 
-    # Dynamic SL sizing: 1.5x ATR clamped to sensible institutional bounds
-    if pair == "XAUUSD":
+    # Dynamic SL sizing: 1.5x ATR clamped to sensible institutional bounds per asset class
+    if any(k in pair for k in ("NAS100", "USTEC", "US100", "NDX", "US30", "DJ30", "GER40", "DAX", "SPX500")):
+        sl_pips = round(max(35.0, min(200.0, raw_atr_pips * 1.5)), 1)
+    elif pair == "XAUUSD" or "GOLD" in pair:
         sl_pips = round(max(25.0, min(120.0, raw_atr_pips * 1.5)), 1)
     else:
         sl_pips = round(max(12.0, min(45.0, raw_atr_pips * 1.5)), 1)

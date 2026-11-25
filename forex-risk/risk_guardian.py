@@ -26,11 +26,8 @@ from forex_core.mt5_bridge import read_mt5_state
 
 
 def _clean_symbol(sym: str) -> str:
-    s = str(sym).upper().replace("/", "").replace("+", "")
-    for sfx in (".PC", ".P", ".R", ".A", ".PRO", ".ECN"):
-        if s.endswith(sfx):
-            s = s[: -len(sfx)]
-    return s[:6]
+    from forex_core.mt5_bridge import clean_pair_name
+    return clean_pair_name(sym)
 
 
 def _load_active_positions(offline: bool = False) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -72,7 +69,8 @@ def evaluate_risk(
     tm_state = load_stage_output("timemachine") or {}
     budget_state = load_stage_output("budget") or {}
     top = scanner_state.get("top_pick", {})
-    is_offline = top.get("data_source") == "simulated_market"
+    mt5_active = read_mt5_state() is not None
+    is_offline = (top.get("data_source") == "simulated_market") and not mt5_active
     ledger, open_positions = _load_active_positions(offline=is_offline)
     pair = _clean_symbol(exit_state.get("pair") or top.get("pair") or "EURUSD")
     direction = (exit_state.get("direction") or top.get("direction") or "BUY").upper()
@@ -90,12 +88,22 @@ def evaluate_risk(
     actual_risk_usd = float(budget_state.get("actual_risk_usd", 50.0))
     max_loss_trade = float(cfg.get("max_loss_per_trade_usd", 100.0))
 
-    daily_loss_so_far = float(
-        simulate_daily_loss
-        if simulate_daily_loss is not None
-        else ledger.get("daily_realized_loss_usd", 0.0)
-    )
+    mt5_state = read_mt5_state()
+    if simulate_daily_loss is not None:
+        daily_loss_so_far = float(simulate_daily_loss)
+    elif mt5_state and "daily_realized_loss_usd" in mt5_state:
+        daily_loss_so_far = float(mt5_state.get("daily_realized_loss_usd", 0.0))
+    else:
+        daily_loss_so_far = float(ledger.get("daily_realized_loss_usd", 0.0))
+
+    # Read account-specific daily loss limit if in prop firm mode (e.g. 4% = $200 on $5k)
     max_daily_loss = float(cfg.get("max_daily_loss_usd", 400.0))
+    for acc in cfg.get("accounts", []):
+        if acc.get("enabled", False) and acc.get("prop_firm_mode", False):
+            acc_bal = float(acc.get("balance_usd", 5000.0))
+            acc_max_dd_pct = float(acc.get("max_daily_loss_pct", 4.0))
+            max_daily_loss = min(max_daily_loss, acc_bal * (acc_max_dd_pct / 100.0))
+            break
 
     open_count = len(open_positions)
     max_open = int(cfg.get("max_open_trades", 5))

@@ -41,16 +41,26 @@ def calculate_lot_size(
 
     pair = (pair or exit_state.get("pair") or top.get("pair") or "EURUSD").upper().replace("/", "").replace("+", "")
     mt5_live = read_mt5_state()
-    base_cfg_bal = float(cfg.get("account_balance_usd", 10000.0))
+
+    # Determine genuine account baseline balance rather than comparing to a hardcoded 10,000
+    active_accs = get_active_accounts()
+    active_mt5_acc = next((a for a in active_accs if a.get("enabled", True) and a.get("type") == "mt5"), None)
 
     if balance_usd is not None:
         balance = float(balance_usd)
+        baseline_bal = balance
         dynamic_mode = False
-    elif mt5_live and mt5_live.get("equity"):
-        balance = float(mt5_live["equity"])
+    elif active_mt5_acc:
+        baseline_bal = float(active_mt5_acc.get("balance_usd", 5000.0))
+        balance = float(mt5_live["equity"]) if (mt5_live and mt5_live.get("equity")) else baseline_bal
+        dynamic_mode = True
+    elif mt5_live and mt5_live.get("balance"):
+        baseline_bal = float(mt5_live["balance"])
+        balance = float(mt5_live.get("equity", baseline_bal))
         dynamic_mode = True
     else:
-        balance = base_cfg_bal
+        baseline_bal = float(cfg.get("account_balance_usd", 10000.0))
+        balance = baseline_bal
         dynamic_mode = True
 
     base_risk_p = float(risk_pct if risk_pct is not None else cfg.get("risk_per_trade_pct", 1.0))
@@ -70,12 +80,16 @@ def calculate_lot_size(
             tier_mult = 0.45
             progression_state = "DEFENSIVE_TIER (0.45x)"
 
-        # Drawdown shield vs profit compounding
-        dd_pct = ((base_cfg_bal - balance) / max(base_cfg_bal, 1.0)) * 100.0
+        # Real intraday drawdown vs actual baseline balance (not false 10k baseline)
+        if baseline_bal > 0:
+            dd_pct = max(0.0, ((baseline_bal - balance) / baseline_bal) * 100.0)
+        else:
+            dd_pct = 0.0
+
         if dd_pct >= 2.5:
             tier_mult *= 0.65
-            progression_state += " + DRAWDOWN_SHIELD"
-        elif balance > base_cfg_bal * 1.02:
+            progression_state += f" + DRAWDOWN_SHIELD (-{dd_pct:.1f}%)"
+        elif balance > baseline_bal * 1.02:
             progression_state += " + EQUITY_COMPOUNDING"
 
         effective_risk_pct = round(base_risk_p * tier_mult, 2)

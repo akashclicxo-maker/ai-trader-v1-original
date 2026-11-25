@@ -56,19 +56,36 @@ def evaluate_entry(
     dist_from_ema_pips = price_to_pips(pair, abs(price - ema20[-1]))
     atr_pips = price_to_pips(pair, atr14[-1])
 
-    # Determine if candle confirms direction and whether to enter at Market or Limit pullback
-    if direction == "BUY":
-        candle_aligned = price >= open_p or price > float(prev["close"])
-        overextended = dist_from_ema_pips > (atr_pips * 1.8)
-        order_type = "BUY_LIMIT" if overextended else "MARKET_BUY"
-        entry_price = format_price(pair, (price + ema20[-1]) / 2.0) if overextended else format_price(pair, price)
-    else:
-        candle_aligned = price <= open_p or price < float(prev["close"])
-        overextended = dist_from_ema_pips > (atr_pips * 1.8)
-        order_type = "SELL_LIMIT" if overextended else "MARKET_SELL"
-        entry_price = format_price(pair, (price + ema20[-1]) / 2.0) if overextended else format_price(pair, price)
+    # Determine if candle confirms direction and ensure we are not entering at overextended exhaustion
+    overextended = dist_from_ema_pips > (atr_pips * 1.8)
 
-    entry_ready = direction in ("BUY", "SELL") and (candle_aligned or conviction_ratio >= 0.0)
+    if direction == "BUY":
+        # Candle is bullish or closing above previous close in upper half of bar
+        candle_aligned = (price >= open_p) or (price >= float(prev["close"]) and price >= (low_p + high_p) / 2.0)
+        order_type = "MARKET_BUY"
+        entry_price = format_price(pair, price)
+    else:
+        # Candle is bearish or closing below previous close in lower half of bar
+        candle_aligned = (price <= open_p) or (price <= float(prev["close"]) and price <= (low_p + high_p) / 2.0)
+        order_type = "MARKET_SELL"
+        entry_price = format_price(pair, price)
+
+    # Genuine entry gate: must be directional alignment, adequate body conviction, and not overextended
+    entry_ready = bool(
+        direction in ("BUY", "SELL")
+        and candle_aligned
+        and not overextended
+        and conviction_ratio >= 0.15
+    )
+
+    if overextended:
+        reason = f"Price overextended from EMA20 ({dist_from_ema_pips:.1f}p > {atr_pips * 1.8:.1f}p threshold). Awaiting pullback."
+    elif not candle_aligned:
+        reason = f"Trigger candle opposing bias ({'Bearish' if direction == 'BUY' else 'Bullish'} bar). Awaiting directional alignment."
+    elif conviction_ratio < 0.15:
+        reason = f"Low candle conviction ({conviction_ratio:.0%}). Awaiting decisive body expansion."
+    else:
+        reason = f"{direction} trigger confirmed ({order_type}) with {conviction_ratio:.0%} body conviction."
 
     output = {
         "pair": pair,
@@ -81,11 +98,7 @@ def evaluate_entry(
         "candle_conviction_ratio": conviction_ratio,
         "distance_from_ema20_pips": dist_from_ema_pips,
         "atr_pips": atr_pips,
-        "trigger_reason": (
-            f"{direction} trigger confirmed ({order_type}) with {conviction_ratio:.0%} body conviction"
-            if entry_ready
-            else "Waiting for stronger trigger candle"
-        ),
+        "trigger_reason": reason,
     }
     save_stage_output("entry", output)
     return output

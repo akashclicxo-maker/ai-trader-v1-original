@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from forex_core.market_data import (
+    compute_adx,
     compute_atr,
     compute_bollinger,
     compute_ema,
@@ -230,43 +231,63 @@ def analyze_pair(
     bb_up, _, bb_lo = compute_bollinger(closes, 20, 2.0)
     rsi14 = compute_rsi(closes, 14)
     atr14 = compute_atr(candles, 14)
+    adx14 = compute_adx(candles, 14)
     sr = detect_support_resistance(candles, lookback=40)
 
+    # Use confirmed closed candle for signal validity and latest candle for current price
+    last_closed = candles[-2] if len(candles) >= 2 else candles[-1]
     last = candles[-1]
     price = float(last["close"])
+    closed_price = float(last_closed["close"])
+    closed_open = float(last_closed["open"])
     atr_val = atr14[-1]
     atr_pips = price_to_pips(pair, atr_val)
     rsi_val = rsi14[-1]
+    adx_val = adx14[-1]
 
     bullish_stack = ema20[-1] > ema50[-1]
-    body = abs(float(last["close"]) - float(last["open"]))
+    body = abs(closed_price - closed_open)
     avg_body = sum(abs(float(c["close"]) - float(c["open"])) for c in candles[-20:]) / 20.0
     momentum_ratio = round(body / max(avg_body, 1e-9), 2)
 
-    if bullish_stack and float(last["close"]) >= float(last["open"]) and 45 <= rsi_val <= 74:
+    # Genuine Chop & Low-ADX Filter:
+    is_chop = (adx_val < 18.0) or (adx_val < 22.0 and 42.0 <= rsi_val <= 58.0 and momentum_ratio < 0.9)
+
+    if is_chop:
+        direction = "BUY" if bullish_stack else "SELL"
+        market_regime = "CHOP_NO_TRADE"
+        setup_type = "low_adx_range_standby"
+        recommended_rr = 1.8
+        score = 58  # Below min_setup_score (85) so 08 /risk strictly blocks it!
+        confluence = f"{sess_name}, Low ADX Filter ({adx_val:.1f} < 20) - Chop Standby"
+    elif bullish_stack and closed_price >= closed_open and 45 <= rsi_val <= 72 and adx_val >= 22.0:
         direction = "BUY"
         market_regime = "STRONG_TREND"
         setup_type = "institutional_trend_continuation"
         recommended_rr = 2.4
-        score = 82 + min(14, int(momentum_ratio * 6))
-    elif (not bullish_stack) and float(last["close"]) <= float(last["open"]) and 26 <= rsi_val <= 55:
+        score = min(96, 80 + int(min(adx_val - 20.0, 10.0)) + min(6, int(momentum_ratio * 3)))
+        confluence = f"{sess_name}, HTF Aligned, M15 EMA Stack, ADX Trend ({adx_val:.1f})"
+    elif (not bullish_stack) and closed_price <= closed_open and 28 <= rsi_val <= 55 and adx_val >= 22.0:
         direction = "SELL"
         market_regime = "STRONG_TREND"
         setup_type = "institutional_trend_continuation"
         recommended_rr = 2.4
-        score = 82 + min(14, int(momentum_ratio * 6))
-    elif bullish_stack:
-        direction = "BUY"
+        score = min(96, 80 + int(min(adx_val - 20.0, 10.0)) + min(6, int(momentum_ratio * 3)))
+        confluence = f"{sess_name}, HTF Aligned, M15 EMA Stack, ADX Trend ({adx_val:.1f})"
+    elif adx_val >= 25.0:
+        direction = "BUY" if bullish_stack else "SELL"
         market_regime = "VOLATILITY_BREAKOUT"
         setup_type = "session_momentum_breakout"
         recommended_rr = 2.0
-        score = 80
+        score = 80 + min(8, int(momentum_ratio * 4))
+        confluence = f"{sess_name}, Volatility Expansion (ADX {adx_val:.1f})"
     else:
-        direction = "SELL"
-        market_regime = "VOLATILITY_BREAKOUT"
-        setup_type = "session_momentum_breakout"
+        direction = "BUY" if bullish_stack else "SELL"
+        market_regime = "CONSOLIDATION_PULLBACK"
+        setup_type = "pullback_monitor"
         recommended_rr = 2.0
-        score = 80
+        score = 70  # Below 85 min score!
+        confluence = f"{sess_name}, Modest ADX ({adx_val:.1f}) - Waiting for Conviction"
 
     final_score = min(98, score)
     return {
@@ -280,10 +301,10 @@ def analyze_pair(
         "recommended_rr": recommended_rr,
         "grade": _grade_from_score(final_score),
         "score": final_score,
-        "confluence": f"{sess_name}, HTF Aligned, M15 EMA Stack, Momentum",
+        "confluence": confluence,
         "rsi_14": round(rsi_val, 1),
         "stoch_k": 55.0,
-        "adx_14": 27.5,
+        "adx_14": round(adx_val, 1),
         "atr_pips": atr_pips,
         "ema_20": format_price(pair, ema20[-1]),
         "ema_50": format_price(pair, ema50[-1]),

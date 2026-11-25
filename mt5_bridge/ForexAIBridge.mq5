@@ -45,45 +45,63 @@ bool IsSymbolTradable(string sym)
 //+------------------------------------------------------------------+
 string ResolveBrokerSymbol(string basePair)
 {
-   if(StringFind(_Symbol, basePair, 0) == 0 && IsSymbolTradable(_Symbol))
+   string clean = basePair;
+   int plusPos = StringFind(clean, "+");
+   if(plusPos > 0)
+      clean = StringSubstr(clean, 0, plusPos);
+
+   // 1. Direct match with clean
+   if(IsSymbolTradable(clean))
+      return clean;
+
+   // 2. Direct match with basePair
+   if(IsSymbolTradable(basePair))
+      return basePair;
+
+   // 3. Match chart symbol if same clean root
+   if(StringFind(_Symbol, clean, 0) == 0 && IsSymbolTradable(_Symbol))
       return _Symbol;
 
+   // 4. Match chart suffix if chart has one (e.g. EURUSD.r -> basePair + ".r")
    if(StringLen(_Symbol) > 6)
    {
       string chartSuffix = StringSubstr(_Symbol, 6);
-      string candidate   = basePair + chartSuffix;
+      string candidate   = clean + chartSuffix;
       if(IsSymbolTradable(candidate))
          return candidate;
    }
 
-   string suffixes[] = {"+", ".pc", ".p", ".r", ".a", "m", ".pro", ".ecn", ""};
+   // 5. Try common broker suffixes
+   string suffixes[] = {"", "+", ".pc", ".p", ".r", ".a", "m", ".pro", ".ecn", ".raw"};
    for(int s = 0; s < ArraySize(suffixes); s++)
    {
-      string candidate = basePair + suffixes[s];
+      string candidate = clean + suffixes[s];
       if(IsSymbolTradable(candidate))
          return candidate;
    }
 
+   // 6. Scan Market Watch symbols
    int totalMW = SymbolsTotal(true);
    for(int i = 0; i < totalMW; i++)
    {
       string sym = SymbolName(i, true);
-      if(StringFind(sym, basePair, 0) == 0 && IsSymbolTradable(sym))
+      if(StringFind(sym, clean, 0) == 0 && IsSymbolTradable(sym))
          return sym;
    }
 
+   // 7. Scan all server symbols
    int totalAll = SymbolsTotal(false);
    for(int i = 0; i < totalAll; i++)
    {
       string sym = SymbolName(i, false);
-      if(StringFind(sym, basePair, 0) == 0 && StringLen(sym) <= 12)
+      if(StringFind(sym, clean, 0) == 0 && StringLen(sym) <= 12)
       {
          if(IsSymbolTradable(sym))
             return sym;
       }
    }
 
-   return _Symbol;
+   return "";
 }
 
 //+------------------------------------------------------------------+
@@ -271,6 +289,12 @@ void ExecuteCommandLine(string line)
       double tpPips  = StringToDouble(parts[6]);
 
       string sym = ResolveBrokerSymbol(rawPair);
+      if(StringLen(sym) == 0)
+      {
+         PrintFormat("[ForexQuantBridge] ERROR: Could not resolve tradable symbol for '%s'", rawPair);
+         WriteAck(cmdId, "ERROR", 0, "Symbol not found or not tradable: " + rawPair);
+         return;
+      }
       g_trade.SetTypeFillingBySymbol(sym);
 
       double minLot  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
@@ -326,6 +350,17 @@ void ExecuteCommandLine(string line)
    else if(action == "CLOSE" && n >= 3)
    {
       ulong ticket = (ulong)StringToInteger(parts[2]);
+      if(PositionSelectByTicket(ticket))
+      {
+         long posTime = PositionGetInteger(POSITION_TIME);
+         if((long)TimeCurrent() - posTime < 22)
+         {
+            PrintFormat("[ForexQuantBridge] Holding rule active: Ticket %I64u held <22s (%d s). Close deferred.",
+                        ticket, (int)((long)TimeCurrent() - posTime));
+            WriteAck(cmdId, "HOLDING_BUFFER", ticket, "Position held under 22 seconds; close deferred for Investabl Rule 4");
+            return;
+         }
+      }
       bool ok = g_trade.PositionClose(ticket);
       WriteAck(cmdId, ok ? "CLOSED" : "ERROR", ticket, g_trade.ResultRetcodeDescription());
    }
@@ -400,10 +435,39 @@ void ExportTerminalState()
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    bool   algoOk     = (bool)(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED));
 
+   // Calculate real today's realized loss & profit from MT5 closed history deals
+   MqlDateTime mdt;
+   TimeToStruct(TimeCurrent(), mdt);
+   mdt.hour = 0; mdt.min = 0; mdt.sec = 0;
+   datetime startOfDay = StructToTime(mdt);
+   HistorySelect(startOfDay, TimeCurrent());
+   int totalDeals = HistoryDealsTotal();
+   double dailyRealizedLoss = 0.0;
+   double dailyRealizedProfit = 0.0;
+   int dealsToday = 0;
+   for(int d = 0; d < totalDeals; d++)
+   {
+      ulong dTicket = HistoryDealGetTicket(d);
+      if(dTicket == 0) continue;
+      long entryType = HistoryDealGetInteger(dTicket, DEAL_ENTRY);
+      if(entryType == DEAL_ENTRY_OUT || entryType == DEAL_ENTRY_INOUT)
+      {
+         double p = HistoryDealGetDouble(dTicket, DEAL_PROFIT) +
+                    HistoryDealGetDouble(dTicket, DEAL_SWAP) +
+                    HistoryDealGetDouble(dTicket, DEAL_COMMISSION);
+         if(p < 0.0)
+            dailyRealizedLoss += MathAbs(p);
+         else
+            dailyRealizedProfit += p;
+         dealsToday++;
+      }
+   }
+
    string json = "{";
    json += StringFormat("\"connected\":true,\"updated_unix\":%I64d,", (long)TimeLocal());
    json += StringFormat("\"login\":%I64d,\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",", login, server, company, currency);
    json += StringFormat("\"balance\":%.2f,\"equity\":%.2f,\"floating_pnl\":%.2f,\"free_margin\":%.2f,", balance, equity, profit, freeMargin);
+   json += StringFormat("\"daily_realized_loss_usd\":%.2f,\"daily_realized_profit_usd\":%.2f,\"trades_today\":%d,", dailyRealizedLoss, dailyRealizedProfit, dealsToday);
    json += StringFormat("\"algo_trading_enabled\":%s,", algoOk ? "true" : "false");
    json += "\"open_positions\":[";
 
@@ -415,6 +479,7 @@ void ExportTerminalState()
       if(ticket == 0) continue;
       string sym   = PositionGetString(POSITION_SYMBOL);
       long   ptype = PositionGetInteger(POSITION_TYPE);
+      long   posTime = PositionGetInteger(POSITION_TIME);
       double vol   = PositionGetDouble(POSITION_VOLUME);
       double openP = PositionGetDouble(POSITION_PRICE_OPEN);
       double curP  = PositionGetDouble(POSITION_PRICE_CURRENT);
@@ -427,10 +492,11 @@ void ExportTerminalState()
       if(!first) json += ",";
       first = false;
       json += StringFormat(
-         "{\"ticket_id\":\"MT5-%I64u\",\"raw_ticket\":%I64u,\"pair\":\"%s\",\"direction\":\"%s\",\"lots\":%.2f,\"remaining_lots\":%.2f,\"entry_price\":%.5f,\"current_price\":%.5f,\"stop_loss\":%.5f,\"tp1_1r\":%.5f,\"tp2_primary\":%.5f,\"breakeven_active\":%s,\"unrealized_pnl_usd\":%.2f}",
+         "{\"ticket_id\":\"MT5-%I64u\",\"raw_ticket\":%I64u,\"pair\":\"%s\",\"direction\":\"%s\",\"lots\":%.2f,\"remaining_lots\":%.2f,\"entry_price\":%.5f,\"current_price\":%.5f,\"stop_loss\":%.5f,\"tp1_1r\":%.5f,\"tp2_primary\":%.5f,\"breakeven_active\":%s,\"unrealized_pnl_usd\":%.2f,\"open_time_unix\":%I64d}",
          ticket, ticket, sym, dir, vol, vol, openP, curP, sl, tp, tp,
          beSet ? "true" : "false",
-         pnl
+         pnl,
+         posTime
       );
    }
    json += "]}";
